@@ -1,9 +1,10 @@
-.PHONY: build nt-book-summaries ot-book-summaries
+.PHONY: setup build verify
 
-build: nt-book-summaries ot-book-summaries
+setup:
+	python3 -m pip install -r requirements.txt
 
-nt-book-summaries:
-	python3 decks/new-testament-book-summaries/build.py
+build:
+	python3 build.py
 
-ot-book-summaries:
-	python3 decks/old-testament-book-summaries/build.py
+verify:
+	python3 build.py --verify-only
