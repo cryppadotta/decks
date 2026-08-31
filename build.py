@@ -22,7 +22,6 @@ ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "dist" / "bible-knowledge.apkg"
 ROOT_DECK = "Bible Knowledge"
 NOTETYPE_NAME = "Bible Knowledge Basic"
-EXPECTED_NOTES = 66
 
 SOURCES = [
     (
@@ -34,6 +33,11 @@ SOURCES = [
         ROOT / "decks" / "new-testament-book-summaries" / "cards.tsv",
         "Bible Knowledge::New Testament::Book Summaries",
         "book-summary:nt",
+    ),
+    (
+        ROOT / "decks" / "bible-stories" / "cards.tsv",
+        "Bible Knowledge::Bible Stories",
+        "bible-story",
     ),
 ]
 
@@ -62,6 +66,10 @@ def read_source(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def source_count() -> int:
+    return sum(len(read_source(path)) for path, _, _ in SOURCES)
+
+
 def create_notetype(col: Collection):
     notetype = col.models.new(NOTETYPE_NAME)
     col.models.add_field(notetype, col.models.new_field("Front"))
@@ -84,15 +92,14 @@ def create_notetype(col: Collection):
     return notetype
 
 
-def populate_collection(path: Path) -> Collection:
+def populate_collection(path: Path) -> tuple[Collection, int]:
     col = Collection(str(path))
     notetype = create_notetype(col)
-
-    # Creating the full names also creates the parent hierarchy.
     root_id = col.decks.id(ROOT_DECK, create=True)
     assert root_id is not None
 
     seen_guids: set[str] = set()
+    expected = source_count()
     total = 0
     for source_path, deck_name, namespace in SOURCES:
         deck_id = col.decks.id(deck_name, create=True)
@@ -115,24 +122,21 @@ def populate_collection(path: Path) -> Collection:
             col.add_note(note, deck_id)
             total += 1
 
-    if total != EXPECTED_NOTES:
-        raise RuntimeError(f"Expected {EXPECTED_NOTES} source notes, found {total}")
-    if col.note_count() != EXPECTED_NOTES or col.card_count() != EXPECTED_NOTES:
+    if total != expected or col.note_count() != expected or col.card_count() != expected:
         raise RuntimeError(
-            f"Collection has {col.note_count()} notes / {col.card_count()} cards; "
-            f"expected {EXPECTED_NOTES}/{EXPECTED_NOTES}"
+            f"Expected {expected} notes/cards; got source={total}, "
+            f"notes={col.note_count()}, cards={col.card_count()}"
         )
-    return col
+    return col, expected
 
 
-def export_package(output: Path) -> None:
+def export_package(output: Path) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()
 
     with tempfile.TemporaryDirectory() as tmp:
-        col_path = Path(tmp) / "source.anki2"
-        col = populate_collection(col_path)
+        col, expected = populate_collection(Path(tmp) / "source.anki2")
         root_id = col.decks.id_for_name(ROOT_DECK)
         assert root_id is not None
         count = col.export_anki_package(
@@ -147,8 +151,9 @@ def export_package(output: Path) -> None:
         )
         col.close()
 
-    if count != EXPECTED_NOTES:
-        raise RuntimeError(f"Anki exported {count} cards; expected {EXPECTED_NOTES}")
+    if count != expected:
+        raise RuntimeError(f"Anki exported {count} cards; expected {expected}")
+    return expected
 
 
 def import_request(package: Path) -> ImportAnkiPackageRequest:
@@ -156,15 +161,17 @@ def import_request(package: Path) -> ImportAnkiPackageRequest:
         package_path=str(package),
         options=ImportAnkiPackageOptions(
             merge_notetypes=True,
-            update_notes=1,      # ALWAYS
-            update_notetypes=1,  # ALWAYS
+            update_notes=1,
+            update_notetypes=1,
             with_scheduling=False,
             with_deck_configs=False,
         ),
     )
 
 
-def verify_package(package: Path) -> None:
+def verify_package(package: Path, expected: int | None = None) -> None:
+    if expected is None:
+        expected = source_count()
     if not package.exists():
         raise RuntimeError(f"Missing package: {package}")
 
@@ -179,25 +186,20 @@ def verify_package(package: Path) -> None:
                 f"Expected modern Anki package members {sorted(required)}; got {sorted(members)}"
             )
 
-    # Most important validation: ask the same Anki backend that produced the
-    # package to import it into a clean collection. Then import it a second
-    # time and ensure stable GUIDs make the operation idempotent.
+    expected_decks = [deck_name for _, deck_name, _ in SOURCES]
     with tempfile.TemporaryDirectory() as tmp:
         col = Collection(str(Path(tmp) / "verify.anki2"))
-        first = col.import_anki_package(import_request(package))
-        if col.note_count() != EXPECTED_NOTES or col.card_count() != EXPECTED_NOTES:
+        col.import_anki_package(import_request(package))
+        if col.note_count() != expected or col.card_count() != expected:
             raise RuntimeError(
-                f"First import produced {col.note_count()} notes / {col.card_count()} cards"
+                f"First import produced {col.note_count()} notes / {col.card_count()} cards; expected {expected}"
             )
-        for deck_name in (
-            "Bible Knowledge::Old Testament::Book Summaries",
-            "Bible Knowledge::New Testament::Book Summaries",
-        ):
+        for deck_name in expected_decks:
             if col.decks.id_for_name(deck_name) is None:
                 raise RuntimeError(f"Missing imported deck: {deck_name}")
 
-        second = col.import_anki_package(import_request(package))
-        if col.note_count() != EXPECTED_NOTES or col.card_count() != EXPECTED_NOTES:
+        col.import_anki_package(import_request(package))
+        if col.note_count() != expected or col.card_count() != expected:
             raise RuntimeError(
                 "Re-import was not idempotent: "
                 f"{col.note_count()} notes / {col.card_count()} cards"
@@ -205,8 +207,8 @@ def verify_package(package: Path) -> None:
         col.close()
 
     print(
-        f"Verified {package}: {EXPECTED_NOTES} cards, modern package format, "
-        "clean import and idempotent re-import."
+        f"Verified {package}: {expected} cards across {len(SOURCES)} source decks, "
+        "modern package format, clean import and idempotent re-import."
     )
 
 
@@ -217,9 +219,11 @@ def main() -> None:
     args = parser.parse_args()
 
     output = args.output.resolve()
-    if not args.verify_only:
-        export_package(output)
-    verify_package(output)
+    if args.verify_only:
+        verify_package(output)
+    else:
+        expected = export_package(output)
+        verify_package(output, expected)
 
 
 if __name__ == "__main__":
