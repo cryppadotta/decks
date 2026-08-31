@@ -14,6 +14,7 @@ The filename and URL stay the same as the repository grows. Re-importing an upda
 
 ```text
 Bible Knowledge
+├── Bible Stories
 ├── Old Testament
 │   └── Book Summaries
 └── New Testament
@@ -24,10 +25,11 @@ Bible Knowledge
 
 | Module | Cards | Source |
 | --- | ---: | --- |
+| [Bible Stories](decks/bible-stories/) | comprehensive narrative set | [`cards.tsv`](decks/bible-stories/cards.tsv) |
 | [Old Testament Book Summaries](decks/old-testament-book-summaries/) | 39 | [`cards.tsv`](decks/old-testament-book-summaries/cards.tsv) |
 | [New Testament Book Summaries](decks/new-testament-book-summaries/) | 27 | [`cards.tsv`](decks/new-testament-book-summaries/cards.tsv) |
 
-Total: **66 cards**.
+The build computes the total card count directly from the canonical source files.
 
 ## Repository layout
 
@@ -57,8 +59,9 @@ make build
 
 `build.py` validates that:
 
-- all expected cards were loaded,
+- all source cards were loaded,
 - Anki produced the modern package format (`meta` + `collection.anki21b`),
+- every configured sub-deck exists after import,
 - the package imports successfully into a clean Anki collection,
 - importing the exact package a second time is idempotent and does not duplicate notes.
 
